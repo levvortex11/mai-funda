@@ -99,7 +99,7 @@ static Status C_by_series(const double x, const double eps, double *const res) {
 /* Ряд D из PDF, начиная с n=1. Для сдачи используем только |x|<1. */
 static Status D_by_series(const double x, const double eps, double *const res) {
     if (!res || !isfinite(x) || !isfinite(eps) || eps < 1e-8) return ERR_ARG;
-    if (fabs(x) >= 1.0) return ERR_ARG;
+    if (fabs(x) >= 1.0) return ERR_CONVERGE;
     double sum = 0.0, term = 1.0;
     for (int n = 1; n <= SERIES_LIMIT; ++n) {
         term *= -x*x * (2.0*n-1.0) / (2.0*n);
@@ -191,7 +191,7 @@ int main(int argc, char *argv[]) {
     st = B_by_series(x, eps, &result); failed |= print_result("Ряд B", st, result);
     st = C_by_series(x, eps, &result); failed |= print_result("Ряд C", st, result);
     if (fabs(x) >= 1.0) {
-        fprintf(stderr, "Ряд D: для этой версии требуется |x| < 1.\n");
+        fprintf(stderr, "Ряд D расходится.\n");
         failed = 1;
     } else {
         st = D_by_series(x, eps, &result); failed |= print_result("Ряд D", st, result);

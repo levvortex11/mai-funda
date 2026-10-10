@@ -11,6 +11,8 @@
 
 typedef enum { OK = 0, ERR_ARG, ERR_FORMAT, ERR_RANGE, ERR_INPUT } Status;
 
+
+
 /* Читает целую лексему; слишком длинную отвергает, а не делит на разные числа. */
 static Status read_word(char *const word, const size_t capacity) {
     if (!word || capacity < 2) return ERR_ARG;

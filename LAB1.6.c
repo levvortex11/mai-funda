@@ -7,6 +7,7 @@
 #include <math.h>
 #include <stdbool.h>
 #include <limits.h>
+#include <float.h>
 
 typedef enum {
     OK = 0,
@@ -16,7 +17,7 @@ typedef enum {
 } Status;
 
 /* Все вершины должны лежать с одной стороны каждого ребра.
-   Вершины передаются в порядке обхода; eps — допуск для координат и cross. */
+   Вершины передаются в порядке обхода; eps — допуск по расстоянию в единицах координат. */
 static Status is_convex(const int v_count, const double eps, bool *const res, ...) {
     if (v_count < 3 || !res || !isfinite(eps) || eps <= 0.0) return ERR_ARG;
     /* Два автоматических массива занимают не более 16 КБ при double=8 байт. */
@@ -48,9 +49,14 @@ static Status is_convex(const int v_count, const double eps, bool *const res, ..
         const int next = (i + 1) % v_count;
         const double dx = x[next] - x[i];
         const double dy = y[next] - y[i];
+        const double length = hypot(dx, dy);
+        if (!isfinite(length)) return ERR_RANGE;
+        if (length <= eps) return OK;
         for (int j = 0; j < v_count; ++j) {
             if (j == i || j == next) continue;
-            const double cross = dx * (y[j] - y[i]) - dy * (x[j] - x[i]);
+            /* Деление на длину ребра превращает cross в расстояние до прямой.
+               Допуск больше не зависит от длины выбранного ребра. */
+            const double cross = (dx / length) * (y[j] - y[i]) - (dy / length) * (x[j] - x[i]);
             if (!isfinite(cross)) return ERR_RANGE;
             if (fabs(cross) <= eps) continue;
             const int current_sign = cross > eps ? 1 : -1;
@@ -69,17 +75,21 @@ static Status poly_value(const double point, const int n, double *const res, ...
     va_list args;
     va_start(args, res);
     
-    double current = 0.0;
+    long double current = 0.0L;
     for (int i = 0; ; ++i) {
         const double coefficient = va_arg(args, double);
         if (!isfinite(coefficient)) { va_end(args); return ERR_ARG; }
-        current = current * point + coefficient;
+        /* fmal округляет произведение и сумму вместе, сохраняя малый остаток. */
+        current = fmal(current, point, coefficient);
         if (!isfinite(current)) { va_end(args); return ERR_RANGE; }
         if (i == n) break; /* Не увеличиваем i после последнего коэффициента. */
     }
     va_end(args);
     
-    *res = current;
+    if (fabsl(current) > DBL_MAX) return ERR_RANGE;
+    const double result = (double)current;
+    if (current != 0.0L && result == 0.0) return ERR_PRECISION;
+    *res = result;
     return OK;
 }
 
@@ -110,20 +120,33 @@ static Status geom_mean(double *const res, const int count, ...) {
     return OK;
 }
 
-/* Быстрая рекурсивная степень, включая отрицательный показатель и INT_MIN. */
-static Status fast_pow(const double base, const int exp, double *const res) {
-    if (!res || !isfinite(base) || (base == 0.0 && exp < 0)) return ERR_ARG;
+/* Рекурсивно считает степень в long double, уменьшая округление на каждом шаге. */
+static Status pow_recursive(const long double base, const int exp, long double *const res) {
+    if (!res || !isfinite(base) || (base == 0.0L && exp < 0)) return ERR_ARG;
     if (exp == 0) {
-        *res = 1.0; /* В этой функции 0^0 принято равным 1. */
+        *res = 1.0L; /* В этой функции 0^0 принято равным 1. */
         return OK;
     }
-    double half;
+    long double half;
     /* Делим показатель на 2, не меняя его знак: -INT_MIN не представим в int. */
-    const Status st = fast_pow(base, exp / 2, &half);
+    const Status st = pow_recursive(base, exp / 2, &half);
     if (st != OK) return st;
-    double result = half * half;
-    if (exp % 2 != 0) result *= exp > 0 ? base : 1.0 / base;
-    if (!isfinite(result) || (base != 0.0 && result == 0.0)) return ERR_RANGE;
+    long double result = half * half;
+    if (exp % 2 != 0) result *= exp > 0 ? base : 1.0L / base;
+    if (!isfinite(result) || (base != 0.0L && result == 0.0L)) return ERR_RANGE;
+    *res = result;
+    return OK;
+}
+
+/* Проверяет аргументы и переводит результат рекурсивной степени обратно в double. */
+static Status fast_pow(const double base, const int exp, double *const res) {
+    if (!res || !isfinite(base) || (base == 0.0 && exp < 0)) return ERR_ARG;
+    long double value;
+    const Status st = pow_recursive(base, exp, &value);
+    if (st != OK) return st;
+    if (fabsl(value) > DBL_MAX) return ERR_RANGE;
+    const double result = (double)value;
+    if (value != 0.0L && result == 0.0) return ERR_RANGE;
     *res = result;
     return OK;
 }
@@ -138,6 +161,10 @@ static Status find_root(double left, double right, const double eps, eq_func con
     double fl = f(left);
     const double fr = f(right);
     if (!isfinite(fl) || !isfinite(fr)) return ERR_RANGE;
+    /* Субнормальные значения уже теряют значащие цифры и могут стать нулём.
+       Для такой функции нельзя надёжно определить знак: просим изменить масштаб. */
+    if (fpclassify(fl) == FP_SUBNORMAL || fpclassify(fr) == FP_SUBNORMAL ||
+        (left != right && fl == 0.0 && fr == 0.0)) return ERR_PRECISION;
     /* Малое f(x) не гарантирует близость к корню: здесь проверяем именно ноль. */
     if (fl == 0.0) { *res = left; return OK; }
     if (fr == 0.0) { *res = right; return OK; }
@@ -150,6 +177,7 @@ static Status find_root(double left, double right, const double eps, eq_func con
         if (mid == left || mid == right) return ERR_PRECISION;
         const double fm = f(mid);
         if (!isfinite(fm)) return ERR_RANGE;
+        if (fpclassify(fm) == FP_SUBNORMAL) return ERR_PRECISION;
         if (fm == 0.0) { *res = mid; return OK; }
         /* Произведение малых значений могло бы округлиться до нуля. */
         if ((fl < 0.0) != (fm < 0.0)) right = mid;

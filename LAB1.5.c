@@ -11,7 +11,7 @@
 
 /* Лимиты ограничивают время работы, достижение лимита не считается успехом. */
 #define SERIES_LIMIT 1000000
-#define GRID_LIMIT 67108864
+#define GRID_LIMIT 134217728
 
 typedef enum { OK = 0, ERR_ARG, ERR_CONVERGE, ERR_RANGE } Status;
 
@@ -96,21 +96,19 @@ static Status C_by_series(const double x, const double eps, double *const res) {
     return ERR_CONVERGE;
 }
 
-/* Ряд D начинается с n=1 и сходится также при x=1 и x=-1. */
+/* Ряд D из PDF, начиная с n=1. Для сдачи используем только |x|<1. */
 static Status D_by_series(const double x, const double eps, double *const res) {
     if (!res || !isfinite(x) || !isfinite(eps) || eps < 1e-8) return ERR_ARG;
-    if (fabs(x) > 1.0) return ERR_CONVERGE;
+    if (fabs(x) >= 1.0) return ERR_ARG;
     double sum = 0.0, term = 1.0;
     for (int n = 1; n <= SERIES_LIMIT; ++n) {
         term *= -x*x * (2.0*n-1.0) / (2.0*n);
         sum += term;
         const double next = -term * x*x * (2.0*n+1.0) / (2.0*n+2.0);
-        const double after = -next * x*x * (2.0*n+3.0) / (2.0*n+4.0);
-        /* Для этого ряда разности модулей членов тоже убывают.
-           Половина следующего члена приближает хвост; ошибка поправки
-           не больше половины разности двух следующих модулей. */
-        if ((fabs(next) - fabs(after)) / 2.0 <= eps / 2.0) {
-            *res = sum + next / 2.0;
+        /* По признаку Лейбница ошибка частичной суммы не больше
+           модуля первого отброшенного члена. Поправок к сумме нет. */
+        if (fabs(next) <= eps / 2.0) {
+            *res = sum;
             return OK;
         }
     }
@@ -119,13 +117,13 @@ static Status D_by_series(const double x, const double eps, double *const res) {
 
 typedef double (*func_ptr)(double);
 
-/* Подынтегральная функция A; log1p сохраняет точность при малом x. */
-static double integrand_a(const double x) { return x == 0.0 ? 1.0 : log1p(x) / x; }
+/* Подынтегральная функция A из PDF: ln(1+x)/x; предел в нуле равен 1. */
+static double integrand_a(const double x) { return x == 0.0 ? 1.0 : log(1.0 + x) / x; }
 /* Подынтегральная функция B. */
 static double integrand_b(const double x) { return exp(-x*x / 2.0); }
-/* Интеграл C: замена x=1-t^2 превращает -log(1-x) dx в -4*t*log(t) dt.
-   После смены пределов интегрируем от 0 до 1; предел при t=0 равен нулю. */
-static double integrand_c(const double t) { return t == 0.0 ? 0.0 : -4.0*t*log(t); }
+/* Подынтегральная функция C из PDF: ln(1/(1-x)).
+   При x=1 особенность: средние прямоугольники не касаются концов. */
+static double integrand_c(const double x) { return log(1.0 / (1.0 - x)); }
 /* Подынтегральная функция D; предел при x -> 0 равен 1. */
 static double integrand_d(const double x) { return x == 0.0 ? 1.0 : pow(x, x); }
 
@@ -149,7 +147,7 @@ static Status integral_by_rectangles(func_ptr const f, const double a, const dou
         }
         const double current = (double)sum;
         if (!isfinite(current)) return ERR_RANGE;
-        if (n > 16 && fabs(current - previous) <= eps / 4.0) { *res = current; return OK; }
+        if (n > 16 && fabs(current - previous) <= eps / 2.0) { *res = current; return OK; }
         previous = current;
     }
     return ERR_CONVERGE;
@@ -192,7 +190,12 @@ int main(int argc, char *argv[]) {
     st = A_by_series(x, eps, &result); failed |= print_result("Ряд A", st, result);
     st = B_by_series(x, eps, &result); failed |= print_result("Ряд B", st, result);
     st = C_by_series(x, eps, &result); failed |= print_result("Ряд C", st, result);
-    st = D_by_series(x, eps, &result); failed |= print_result("Ряд D", st, result);
+    if (fabs(x) >= 1.0) {
+        fprintf(stderr, "Ряд D: для этой версии требуется |x| < 1.\n");
+        failed = 1;
+    } else {
+        st = D_by_series(x, eps, &result); failed |= print_result("Ряд D", st, result);
+    }
     /* Средние прямоугольники не касаются концов, поэтому обрезать [0,1] не нужно. */
     st = integral_by_rectangles(integrand_a, 0.0, 1.0, eps, &result); failed |= print_result("Интеграл A", st, result);
     st = integral_by_rectangles(integrand_b, 0.0, 1.0, eps, &result); failed |= print_result("Интеграл B", st, result);

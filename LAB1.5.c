@@ -6,7 +6,6 @@
 #include <stdlib.h>
 #include <math.h>
 #include <stdbool.h>
-#include <errno.h>
 #include <ctype.h>
 #include <float.h>
 
@@ -20,9 +19,19 @@ typedef enum { OK = 0, ERR_ARG, ERR_CONVERGE, ERR_RANGE } Status;
 static Status parse_double(const char *const s, double *const res) {
     if (!s || !*s || !res || isspace((unsigned char)*s)) return ERR_ARG;
     char *end;
-    errno = 0;
     const double value = strtod(s, &end);
-    if (end == s || *end || errno == ERANGE || !isfinite(value)) return ERR_ARG;
+    if (end == s || *end || !isfinite(value)) return ERR_ARG;
+    /* Слишком маленькое ненулевое число не принимаем за точный ноль.
+       Проверяем значащую часть отдельно от показателя степени. */
+    const char *p = s;
+    if (*p == '+' || *p == '-') ++p;
+    bool hex = p[0] == '0' && (p[1] == 'x' || p[1] == 'X');
+    if (hex) p += 2;
+    bool nonzero = false;
+    for (; *p && (hex ? (*p != 'p' && *p != 'P') : (*p != 'e' && *p != 'E')); ++p) {
+        if (*p != '0' && *p != '.') nonzero = true;
+    }
+    if ((value == 0.0 && nonzero) || (value != 0.0 && fabs(value) < DBL_MIN)) return ERR_ARG;
     *res = value;
     return OK;
 }

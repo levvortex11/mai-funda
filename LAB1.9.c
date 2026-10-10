@@ -7,7 +7,6 @@
 #include <time.h>
 #include <stdbool.h>
 #include <limits.h>
-#include <errno.h>
 #include <ctype.h>
 
 typedef enum {
@@ -22,12 +21,21 @@ typedef enum {
 /* Разбирает целый int целиком, проверяя знак, цифры и диапазон. */
 static Status parse_int(const char *const s, int *const res) {
     if (!s || !*s || !res || isspace((unsigned char)*s)) return ERR_ARG;
-    char *end;
-    errno = 0;
-    const long value = strtol(s, &end, 10);
-    if (end == s || *end) return ERR_ARG;
-    if (errno == ERANGE || value < INT_MIN || value > INT_MAX) return ERR_RANGE;
-    *res = (int)value;
+    bool negative = *s == '-';
+    const char *p = s;
+    if (*p == '+' || *p == '-') ++p;
+    if (!*p) return ERR_ARG;
+    int value = 0;
+    const int limit = negative ? INT_MIN : -INT_MAX;
+    /* Накапливаем отрицательное число, чтобы поддержать INT_MIN.
+       Проверка выполняется до умножения и вычитания цифры. */
+    for (; *p; ++p) {
+        if (*p < '0' || *p > '9') return ERR_ARG;
+        int digit = *p - '0';
+        if (value < (limit + digit) / 10) return ERR_RANGE;
+        value = value * 10 - digit;
+    }
+    *res = negative ? value : -value;
     return OK;
 }
 

@@ -7,7 +7,6 @@
 #include <string.h>
 #include <stdbool.h>
 #include <limits.h>
-#include <errno.h>
 #include <ctype.h>
 
 typedef enum { OK = 0, ERR_ARG, ERR_FORMAT, ERR_RANGE, ERR_INPUT } Status;
@@ -41,16 +40,17 @@ static Status parse_integer(const char *const str, const int base, long long *co
     if (!str || !res || base < 2 || base > 36) return ERR_ARG;
     size_t i = str[0] == '-' || str[0] == '+' ? 1 : 0;
     if (!str[i]) return ERR_FORMAT;
+    bool negative = str[0] == '-';
+    const long long limit = negative ? LLONG_MIN : -LLONG_MAX;
+    long long value = 0;
+    /* Отрицательное накопление позволяет прочитать LLONG_MIN без его модуля. */
     for (; str[i]; ++i) {
         const int digit = char_val(str[i]);
         if (digit < 0 || digit >= base) return ERR_FORMAT;
+        if (value < (limit + digit) / base) return ERR_RANGE;
+        value = value * base - digit;
     }
-    char *end;
-    errno = 0;
-    const long long value = strtoll(str, &end, base);
-    if (errno == ERANGE) return ERR_RANGE;
-    if (end == str || *end) return ERR_FORMAT;
-    *res = value;
+    *res = negative ? value : -value;
     return OK;
 }
 

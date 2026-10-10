@@ -5,10 +5,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
-#include <errno.h>
 #include <string.h>
 #include <ctype.h>
 #include <stdint.h>
+#include <limits.h>
 
 typedef enum {
     OK = 0,
@@ -94,12 +94,17 @@ static Status mode_file(FILE *in, FILE *out) {
         int base = get_min_base(word + sign_offset);
         if (base == 0) { st = ERR_ARG; break; }
 
-        /* errno сбрасываем перед вызовом: старое значение не относится к этому числу. */
-        char *endptr;
-        errno = 0;
-        long long dec_val = strtoll(word, &endptr, base);
-        if (errno == ERANGE) { st = ERR_RANGE; break; }
-        if (endptr == word || *endptr != '\0') { st = ERR_ARG; break; }
+        /* Накапливаем число со знаком минус: модуль LLONG_MIN не помещается.
+           Границу проверяем до умножения, поэтому переполнения не происходит. */
+        long long dec_val = 0;
+        const long long limit = is_negative ? LLONG_MIN : -LLONG_MAX;
+        for (size_t i = sign_offset; word[i]; ++i) {
+            int digit = char_val(word[i]);
+            if (dec_val < (limit + digit) / base) { st = ERR_RANGE; break; }
+            dec_val = dec_val * base - digit;
+        }
+        if (st != OK) break;
+        if (!is_negative) dec_val = -dec_val;
 
         /* Пропускаем нули для вывода */
         const char *clean_word = skip_leading_zeros(word + sign_offset);
